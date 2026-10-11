@@ -3,14 +3,17 @@ import {
   MAX_ANSWER_LENGTH,
   MAX_CHAT_LENGTH,
   MAX_NICKNAME_LENGTH,
+  type Surrender,
 } from "../../shared/protocol.ts";
 import { Timer } from "./Timer.tsx";
 import { useGame } from "./useGame.ts";
 
 export default function App() {
   const game = useGame();
-  const { room, status, playerId } = game;
+  const { room, status, playerId, surrender } = game;
   const me = room?.players.find((p) => p.id === playerId);
+  const opponent = room?.players.find((p) => p.id !== playerId);
+  const reconnecting = Boolean(opponent && !opponent.connected && !surrender);
 
   return (
     <div className="arena relative min-h-screen">
@@ -33,15 +36,23 @@ export default function App() {
       </header>
 
       <main className="relative z-10 mx-auto max-w-6xl px-5 pb-16">
+        {surrender && room ? <SurrenderBanner surrender={surrender} selfId={playerId} /> : null}
+        {reconnecting ? (
+          <p className="mb-4 rounded-2xl border border-amber-300/30 bg-amber-300/10 px-4 py-3 text-sm text-amber-200">
+            {opponent?.nickname ?? "Opponent"} dropped. Waiting to see if they reconnect…
+          </p>
+        ) : null}
         {status !== "playing" || !room ? (
           <Home error={game.error} connecting={status === "connecting"} onJoin={game.connect} />
         ) : room.phase === "waiting" ? (
           <Waiting roomCode={room.code} players={room.players} />
         ) : room.phase === "question" ? (
           <Question
+            roomCode={room.code}
             question={room.question}
             endsAt={room.phaseEndsAt}
-            submitted={Boolean(me?.hasAnswer)}
+            submitted={Boolean(me?.hasAnswer || room.myAnswer)}
+            lockedText={room.myAnswer}
             onSubmit={(text) => game.send({ type: "submit_answer", text })}
             error={game.error}
           />
@@ -52,12 +63,15 @@ export default function App() {
             stances={room.stances}
             messages={room.messages}
             playerId={playerId}
+            locked={Boolean(surrender)}
             onChat={(text) => game.send({ type: "chat", text })}
           />
         ) : (
           <Ended
             question={room.question}
             stances={room.stances}
+            surrender={surrender}
+            selfId={playerId}
             onAgain={() => game.send({ type: "play_again" })}
           />
         )}
@@ -148,6 +162,17 @@ function Pill({ children }: { children: string }) {
   );
 }
 
+function SurrenderBanner({ surrender, selfId }: { surrender: Surrender; selfId: string | null }) {
+  const self = surrender.playerId === selfId;
+  return (
+    <p className="mb-4 rounded-2xl border border-hot/40 bg-hot/10 px-4 py-3 text-sm text-hot">
+      {self
+        ? "You left the arena — that counts as a surrender."
+        : `${surrender.nickname} left the arena — they surrender.`}
+    </p>
+  );
+}
+
 function Waiting({
   roomCode,
   players,
@@ -185,19 +210,24 @@ function Waiting({
 }
 
 function Question({
+  roomCode,
   question,
   endsAt,
   submitted,
+  lockedText,
   onSubmit,
   error,
 }: {
+  roomCode: string;
   question: string;
   endsAt: number | null;
   submitted: boolean;
+  lockedText: string | null;
   onSubmit: (text: string) => void;
   error: string | null;
 }) {
-  const [text, setText] = useState("");
+  const draftKey = `argueio.draft.${roomCode}`;
+  const [text, setText] = useState(() => localStorage.getItem(draftKey) ?? "");
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -213,14 +243,21 @@ function Question({
         </div>
         <h2 className="mt-6 font-display text-3xl leading-tight md:text-5xl">{question}</h2>
         {submitted ? (
-          <p className="mt-10 rounded-2xl border border-lime/30 bg-lime/10 p-5 text-lime">
-            Locked in. Waiting for the other player — or the clock.
-          </p>
+          <div className="mt-10 rounded-2xl border border-lime/30 bg-lime/10 p-5">
+            <p className="text-lime">Locked in. Waiting for the other player — or the clock.</p>
+            {lockedText ? (
+              <p className="mt-3 whitespace-pre-wrap text-white/80">{lockedText}</p>
+            ) : null}
+          </div>
         ) : (
           <form onSubmit={submit} className="mt-8">
             <textarea
               value={text}
-              onChange={(e) => setText(e.target.value.slice(0, MAX_ANSWER_LENGTH))}
+              onChange={(e) => {
+                const next = e.target.value.slice(0, MAX_ANSWER_LENGTH);
+                setText(next);
+                localStorage.setItem(draftKey, next);
+              }}
               rows={8}
               placeholder="Your argument, no hedging…"
               className="w-full resize-none rounded-2xl border border-line bg-ink p-4 outline-none ring-lime/40 focus:ring-2"
@@ -255,6 +292,7 @@ function Debate({
   stances,
   messages,
   playerId,
+  locked,
   onChat,
 }: {
   question: string;
@@ -262,6 +300,7 @@ function Debate({
   stances: { playerId: string; nickname: string; color: string; text: string }[];
   messages: { id: string; playerId: string; nickname: string; color: string; text: string }[];
   playerId: string | null;
+  locked: boolean;
   onChat: (text: string) => void;
 }) {
   const [text, setText] = useState("");
@@ -329,11 +368,14 @@ function Debate({
         <form onSubmit={submit} className="flex gap-2 border-t border-line p-3">
           <input
             value={text}
+            disabled={locked}
             onChange={(e) => setText(e.target.value.slice(0, MAX_CHAT_LENGTH))}
-            placeholder="Argue in 280 characters…"
-            className="flex-1 rounded-xl border border-line bg-ink px-3 py-2 outline-none ring-lime/40 focus:ring-2"
+            placeholder={locked ? "Debate over." : "Argue in 280 characters…"}
+            className="flex-1 rounded-xl border border-line bg-ink px-3 py-2 outline-none ring-lime/40 focus:ring-2 disabled:opacity-50"
           />
-          <button className="rounded-xl bg-lime px-4 font-display text-ink">send</button>
+          <button disabled={locked} className="rounded-xl bg-lime px-4 font-display text-ink disabled:opacity-50">
+            send
+          </button>
         </form>
       </div>
     </section>
@@ -343,16 +385,24 @@ function Debate({
 function Ended({
   question,
   stances,
+  surrender,
+  selfId,
   onAgain,
 }: {
   question: string;
-  endsAt?: number | null;
   stances: { playerId: string; nickname: string; color: string; text: string }[];
+  surrender: Surrender | null;
+  selfId: string | null;
   onAgain: () => void;
 }) {
+  const label = surrender
+    ? surrender.playerId === selfId
+      ? "you surrendered"
+      : `${surrender.nickname} surrendered`
+    : "time’s up";
   return (
     <section className="mx-auto max-w-3xl pt-6 text-center">
-      <p className="text-sm uppercase tracking-[0.25em] text-white/40">time’s up</p>
+      <p className="text-sm uppercase tracking-[0.25em] text-white/40">{label}</p>
       <h2 className="mt-3 font-display text-4xl md:text-5xl">{question}</h2>
       <div className="mt-8 grid gap-4 md:grid-cols-2">
         {stances.map((stance) => (

@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { ClientMessage } from "../shared/protocol.ts";
-import { chat, disconnect, join, playAgain, submitAnswer } from "./rooms.ts";
+import { chat, disconnect, join, playAgain, resume, submitAnswer } from "./rooms.ts";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -42,7 +42,10 @@ wss.on("connection", (socket: WebSocket) => {
     if (!message) return;
     switch (message.type) {
       case "join":
-        join(socket, message.nickname, message.roomCode);
+        join(socket, message.nickname, message.playerId, message.roomCode);
+        break;
+      case "resume":
+        resume(socket, message.playerId);
         break;
       case "submit_answer":
         submitAnswer(socket, message.text);
