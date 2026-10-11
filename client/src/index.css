@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Syne", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --color-ink: #07080f;
+  --color-panel: #10121c;
+  --color-line: #2a3148;
+  --color-lime: #c8f542;
+  --color-hot: #ff3d8a;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ink);
+  color: #eef2ff;
+  font-family: var(--font-sans);
+}
+
+.arena {
+  background:
+    radial-gradient(1200px 500px at 10% -10%, rgba(200, 245, 66, 0.12), transparent 55%),
+    radial-gradient(900px 400px at 110% 10%, rgba(255, 61, 138, 0.16), transparent 50%),
+    linear-gradient(#07080f, #07080f);
+}
+
+.arena::before {
+  content: "";
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at center, black 40%, transparent 80%);
+}
+
+.glow-btn {
+  box-shadow: 0 0 0 1px rgba(200, 245, 66, 0.35), 0 0 28px rgba(200, 245, 66, 0.22);
+}
+
+.chat-scroller {
+  scrollbar-width: thin;
+  scrollbar-color: #2a3148 transparent;
+}
