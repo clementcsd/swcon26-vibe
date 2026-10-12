@@ -45,7 +45,7 @@ export default function App() {
         {status !== "playing" || !room ? (
           <Home error={game.error} connecting={status === "connecting"} onJoin={game.connect} />
         ) : room.phase === "waiting" ? (
-          <Waiting roomCode={room.code} players={room.players} />
+          <Waiting roomCode={room.code} players={room.players} onCancel={game.cancel} />
         ) : room.phase === "question" ? (
           <Question
             roomCode={room.code}
@@ -89,7 +89,9 @@ function Home({
   connecting: boolean;
   onJoin: (nickname: string, roomCode?: string) => void;
 }) {
-  const [nickname, setNickname] = useState("");
+  const [nickname, setNickname] = useState(
+    () => (typeof localStorage !== "undefined" && localStorage.getItem("argueio.nickname")) || "",
+  );
   const [roomCode, setRoomCode] = useState("");
 
   function submit(event: FormEvent, withCode: boolean) {
@@ -176,9 +178,11 @@ function SurrenderBanner({ surrender, selfId }: { surrender: Surrender; selfId: 
 function Waiting({
   roomCode,
   players,
+  onCancel,
 }: {
   roomCode: string;
   players: { id: string; nickname: string; color: string; connected: boolean }[];
+  onCancel: () => void;
 }) {
   return (
     <section className="mx-auto max-w-xl pt-10 text-center">
@@ -205,6 +209,13 @@ function Waiting({
           </li>
         ) : null}
       </ul>
+      <button
+        type="button"
+        onClick={onCancel}
+        className="mt-8 rounded-2xl border border-line px-6 py-3 text-white/70 hover:border-hot/50 hover:text-hot"
+      >
+        cancel and go home
+      </button>
     </section>
   );
 }

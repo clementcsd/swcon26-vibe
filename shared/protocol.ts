@@ -52,6 +52,7 @@ export type RoomState = {
 export type ClientMessage =
   | { type: "join"; nickname: string; roomCode?: string; playerId: string }
   | { type: "resume"; playerId: string }
+  | { type: "leave" }
   | { type: "submit_answer"; text: string }
   | { type: "chat"; text: string }
   | { type: "play_again" };
@@ -61,4 +62,5 @@ export type ServerMessage =
   | { type: "state"; room: RoomState }
   | { type: "chat"; message: ChatMessage }
   | { type: "opponent_left"; playerId: string; nickname: string }
+  | { type: "left" }
   | { type: "error"; message: string };

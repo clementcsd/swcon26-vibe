@@ -410,6 +410,28 @@ export function playAgain(socket: WebSocket): void {
   maybeStart(room);
 }
 
+export function leave(socket: WebSocket): void {
+  const loc = socketRoom.get(socket);
+  if (!loc) return;
+  const room = rooms.get(loc.roomCode);
+  if (!room) return;
+  const player = room.players.find((p) => p.id === loc.playerId);
+  if (!player || player.socket !== socket) return;
+  if (room.phase !== "waiting") {
+    send(socket, { type: "error", message: "The debate already started — you cannot cancel." });
+    return;
+  }
+
+  room.players = room.players.filter((p) => p.id !== player.id);
+  playerRooms.delete(player.id);
+  socketRoom.delete(socket);
+  player.connected = false;
+  player.socket = null;
+  send(socket, { type: "left" });
+  broadcast(room);
+  destroyIfEmpty(room);
+}
+
 export function disconnect(socket: WebSocket): void {
   const loc = socketRoom.get(socket);
   if (!loc) return;

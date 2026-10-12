@@ -38,6 +38,15 @@ export function useGame() {
     setStatus(next);
   };
 
+  const resetToHome = useCallback(() => {
+    clearActive();
+    resumeAttempt.current = false;
+    setRoom(null);
+    setSurrender(null);
+    setError(null);
+    updateStatus("idle");
+  }, []);
+
   const send = useCallback((message: ClientMessage) => {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
@@ -73,6 +82,8 @@ export function useGame() {
         });
       } else if (message.type === "opponent_left") {
         setSurrender({ playerId: message.playerId, nickname: message.nickname });
+      } else if (message.type === "left") {
+        resetToHome();
       } else if (message.type === "error") {
         if (resumeAttempt.current) {
           resumeAttempt.current = false;
@@ -89,7 +100,7 @@ export function useGame() {
     socket.onclose = () => {
       if (statusRef.current === "connecting") updateStatus("idle");
     };
-  }, []);
+  }, [resetToHome]);
 
   const connect = useCallback(
     (nickname: string, roomCode?: string) => {
@@ -112,6 +123,10 @@ export function useGame() {
     [openSocket],
   );
 
+  const cancel = useCallback(() => {
+    send({ type: "leave" });
+  }, [send]);
+
   useEffect(() => {
     getOrCreatePlayerId();
     if (localStorage.getItem(ACTIVE_KEY) !== "1") return;
@@ -127,5 +142,5 @@ export function useGame() {
     return () => socketRef.current?.close();
   }, []);
 
-  return { status, playerId, room, error, surrender, connect, send, setError };
+  return { status, playerId, room, error, surrender, connect, cancel, send, setError };
 }
