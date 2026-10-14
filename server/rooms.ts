@@ -1,10 +1,12 @@
 import { WebSocket } from "ws";
 import {
   DEBATE_MS,
+  DEFAULT_SEATS,
   MAX_ANSWER_LENGTH,
   MAX_CHAT_LENGTH,
   MAX_NICKNAME_LENGTH,
   MAX_PLAYERS,
+  MIN_PLAYERS,
   QUESTION_MS,
   RECONNECT_MS,
   type ChatMessage,
@@ -17,7 +19,18 @@ import {
 } from "../shared/protocol.ts";
 import { pickQuestion } from "./questions.ts";
 
-const COLORS = ["#22d3ee", "#f472b6", "#a3e635", "#fbbf24", "#c084fc", "#fb7185"];
+const COLORS = [
+  "#22d3ee",
+  "#f472b6",
+  "#a3e635",
+  "#fbbf24",
+  "#c084fc",
+  "#fb7185",
+  "#38bdf8",
+  "#fb923c",
+  "#4ade80",
+  "#e879f9",
+];
 const PLAYER_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -40,6 +53,8 @@ type Room = {
   messages: ChatMessage[];
   timer: ReturnType<typeof setTimeout> | null;
   surrender: Surrender | null;
+  hostId: string;
+  seatLimit: number;
 };
 
 const rooms = new Map<string, Room>();
@@ -66,13 +81,18 @@ function send(socket: WebSocket | null, message: ServerMessage): void {
   socket.send(JSON.stringify(message));
 }
 
-function publicPlayer(player: Player): PlayerPublic {
+function connectedPlayers(room: Room): Player[] {
+  return room.players.filter((player) => player.connected);
+}
+
+function publicPlayer(room: Room, player: Player): PlayerPublic {
   return {
     id: player.id,
     nickname: player.nickname,
     color: player.color,
     connected: player.connected,
     hasAnswer: player.answer !== null,
+    isHost: player.id === room.hostId,
   };
 }
 
@@ -102,11 +122,13 @@ export function snapshot(room: Room, viewerId: string): RoomState {
     phase: room.phase,
     question: room.question,
     phaseEndsAt: room.phaseEndsAt,
-    players: room.players.map(publicPlayer),
+    players: room.players.map((player) => publicPlayer(room, player)),
     stances: stancesFor(room, viewerId),
     messages: messagesFor(room),
     myAnswer: viewer?.answer ?? null,
     surrender: room.surrender,
+    hostId: room.hostId,
+    seatLimit: room.seatLimit,
   };
 }
 
@@ -128,6 +150,21 @@ function clearReconnect(player: Player): void {
     clearTimeout(player.reconnectTimer);
     player.reconnectTimer = null;
   }
+}
+
+function promoteHost(room: Room): void {
+  const next = connectedPlayers(room)[0];
+  room.hostId = next?.id ?? "";
+}
+
+function removePlayer(room: Room, player: Player): void {
+  clearReconnect(player);
+  room.players = room.players.filter((p) => p.id !== player.id);
+  playerRooms.delete(player.id);
+  if (player.socket) socketRoom.delete(player.socket);
+  player.connected = false;
+  player.socket = null;
+  if (room.hostId === player.id) promoteHost(room);
 }
 
 function startQuestion(room: Room): void {
@@ -159,17 +196,10 @@ function endDebate(room: Room): void {
   broadcast(room);
 }
 
-function maybeStart(room: Room): void {
-  const ready = room.players.filter((player) => player.connected);
-  if (room.phase === "waiting" && ready.length >= MAX_PLAYERS) {
-    startQuestion(room);
-  }
-}
-
 function maybeAdvanceQuestion(room: Room): void {
   if (room.phase !== "question") return;
-  const live = room.players.filter((player) => player.connected);
-  if (live.length >= MAX_PLAYERS && live.every((player) => player.answer)) {
+  const live = connectedPlayers(room);
+  if (live.length >= MIN_PLAYERS && live.every((player) => player.answer)) {
     startDebate(room);
   }
 }
@@ -194,15 +224,6 @@ function validPlayerId(id: string | undefined): id is string {
   return Boolean(id && PLAYER_ID_RE.test(id));
 }
 
-function findOpenRoom(): Room | null {
-  for (const room of rooms.values()) {
-    if (room.phase !== "waiting") continue;
-    if (room.players.filter((player) => player.connected).length >= MAX_PLAYERS) continue;
-    return room;
-  }
-  return null;
-}
-
 function createRoom(): Room {
   const room: Room = {
     code: uniqueCode(),
@@ -213,6 +234,8 @@ function createRoom(): Room {
     messages: [],
     timer: null,
     surrender: null,
+    hostId: "",
+    seatLimit: DEFAULT_SEATS,
   };
   rooms.set(room.code, room);
   return room;
@@ -234,12 +257,33 @@ function welcome(player: Player, room: Room): void {
   send(player.socket, { type: "welcome", playerId: player.id, room: snapshot(room, player.id) });
 }
 
+function locate(
+  socket: WebSocket,
+): { room: Room; player: Player } | null {
+  const loc = socketRoom.get(socket);
+  if (!loc) return null;
+  const room = rooms.get(loc.roomCode);
+  if (!room) return null;
+  const player = room.players.find((p) => p.id === loc.playerId);
+  if (!player || player.socket !== socket) return null;
+  return { room, player };
+}
+
+function requireHost(socket: WebSocket): { room: Room; player: Player } | null {
+  const found = locate(socket);
+  if (!found) return null;
+  if (found.player.id !== found.room.hostId) {
+    send(socket, { type: "error", message: "Only the host can do that." });
+    return null;
+  }
+  return found;
+}
+
 function forfeit(room: Room, player: Player): void {
   player.reconnectTimer = null;
   if (player.connected) return;
   if (room.phase === "waiting") {
-    room.players = room.players.filter((p) => p.id !== player.id);
-    playerRooms.delete(player.id);
+    removePlayer(room, player);
     broadcast(room);
     destroyIfEmpty(room);
     return;
@@ -248,11 +292,6 @@ function forfeit(room: Room, player: Player): void {
     destroyIfEmpty(room);
     return;
   }
-
-  room.surrender = { playerId: player.id, nickname: player.nickname };
-  room.phase = "ended";
-  room.phaseEndsAt = Date.now();
-  clearTimer(room);
 
   const left: ServerMessage = {
     type: "opponent_left",
@@ -263,7 +302,17 @@ function forfeit(room: Room, player: Player): void {
     if (other.id === player.id) continue;
     send(other.socket, left);
   }
+  removePlayer(room, player);
+
+  const live = connectedPlayers(room);
+  if (live.length < MIN_PLAYERS) {
+    room.surrender = { playerId: player.id, nickname: player.nickname };
+    room.phase = "ended";
+    room.phaseEndsAt = Date.now();
+    clearTimer(room);
+  }
   broadcast(room);
+  destroyIfEmpty(room);
 }
 
 function rejoin(socket: WebSocket, playerId: string): boolean {
@@ -282,7 +331,6 @@ function rejoin(socket: WebSocket, playerId: string): boolean {
   attach(socket, room, player);
   welcome(player, room);
   broadcast(room);
-  maybeStart(room);
   maybeAdvanceQuestion(room);
   return true;
 }
@@ -319,16 +367,16 @@ export function join(
       return;
     }
   } else {
-    room = findOpenRoom() ?? createRoom();
+    room = createRoom();
   }
 
-  const live = room.players.filter((player) => player.connected);
-  if (live.length >= MAX_PLAYERS && room.phase === "waiting") {
-    send(socket, { type: "error", message: "That room is full. Try another code." });
-    return;
-  }
   if (room.phase !== "waiting") {
     send(socket, { type: "error", message: "That debate already started." });
+    return;
+  }
+  const live = connectedPlayers(room);
+  if (live.length >= room.seatLimit) {
+    send(socket, { type: "error", message: "That lobby is full. Try another code." });
     return;
   }
 
@@ -342,19 +390,74 @@ export function join(
     reconnectTimer: null,
   };
   room.players.push(player);
+  if (!room.hostId) room.hostId = player.id;
   attach(socket, room, player);
   welcome(player, room);
   broadcast(room);
-  maybeStart(room);
+}
+
+export function startGame(socket: WebSocket): void {
+  const found = requireHost(socket);
+  if (!found) return;
+  const { room } = found;
+  if (room.phase !== "waiting") {
+    send(socket, { type: "error", message: "The debate already started." });
+    return;
+  }
+  if (connectedPlayers(room).length < MIN_PLAYERS) {
+    send(socket, { type: "error", message: "Need at least two players to start." });
+    return;
+  }
+  startQuestion(room);
+}
+
+export function setSeats(socket: WebSocket, seats: number): void {
+  const found = requireHost(socket);
+  if (!found) return;
+  const { room } = found;
+  if (room.phase !== "waiting") {
+    send(socket, { type: "error", message: "Seat count is locked once the debate starts." });
+    return;
+  }
+  const next = Math.round(Number(seats));
+  if (!Number.isFinite(next) || next < MIN_PLAYERS || next > MAX_PLAYERS) {
+    send(socket, { type: "error", message: `Seats must be between ${MIN_PLAYERS} and ${MAX_PLAYERS}.` });
+    return;
+  }
+  if (next < connectedPlayers(room).length) {
+    send(socket, { type: "error", message: "Kick someone first — seats can’t go below players already here." });
+    return;
+  }
+  room.seatLimit = next;
+  broadcast(room);
+}
+
+export function kick(socket: WebSocket, targetId: string): void {
+  const found = requireHost(socket);
+  if (!found) return;
+  const { room, player: host } = found;
+  if (room.phase !== "waiting") {
+    send(socket, { type: "error", message: "You can only kick people from the lobby." });
+    return;
+  }
+  if (targetId === host.id) {
+    send(socket, { type: "error", message: "You can’t kick yourself. Leave instead." });
+    return;
+  }
+  const target = room.players.find((p) => p.id === targetId);
+  if (!target) return;
+  const targetSocket = target.socket;
+  removePlayer(room, target);
+  send(targetSocket, { type: "kicked" });
+  broadcast(room);
+  destroyIfEmpty(room);
 }
 
 export function submitAnswer(socket: WebSocket, text: string): void {
-  const loc = socketRoom.get(socket);
-  if (!loc) return;
-  const room = rooms.get(loc.roomCode);
-  if (!room || room.phase !== "question") return;
-  const player = room.players.find((p) => p.id === loc.playerId);
-  if (!player || player.answer) return;
+  const found = locate(socket);
+  if (!found) return;
+  const { room, player } = found;
+  if (room.phase !== "question" || player.answer) return;
 
   const answer = text.trim().slice(0, MAX_ANSWER_LENGTH);
   if (answer.length < 8) {
@@ -367,12 +470,10 @@ export function submitAnswer(socket: WebSocket, text: string): void {
 }
 
 export function chat(socket: WebSocket, text: string): void {
-  const loc = socketRoom.get(socket);
-  if (!loc) return;
-  const room = rooms.get(loc.roomCode);
-  if (!room || room.phase !== "debate" || room.surrender) return;
-  const player = room.players.find((p) => p.id === loc.playerId);
-  if (!player) return;
+  const found = locate(socket);
+  if (!found) return;
+  const { room, player } = found;
+  if (room.phase !== "debate" || room.surrender) return;
 
   const body = text.trim().slice(0, MAX_CHAT_LENGTH);
   if (!body) return;
@@ -393,10 +494,10 @@ export function chat(socket: WebSocket, text: string): void {
 }
 
 export function playAgain(socket: WebSocket): void {
-  const loc = socketRoom.get(socket);
-  if (!loc) return;
-  const room = rooms.get(loc.roomCode);
-  if (!room || room.phase !== "ended") return;
+  const found = locate(socket);
+  if (!found) return;
+  const { room } = found;
+  if (room.phase !== "ended") return;
 
   room.players = room.players.filter((p) => p.connected);
   for (const player of room.players) player.answer = null;
@@ -405,28 +506,24 @@ export function playAgain(socket: WebSocket): void {
   room.phaseEndsAt = null;
   room.question = "";
   room.surrender = null;
+  if (!room.players.some((p) => p.id === room.hostId)) promoteHost(room);
+  if (room.seatLimit < connectedPlayers(room).length) {
+    room.seatLimit = Math.min(MAX_PLAYERS, connectedPlayers(room).length);
+  }
   clearTimer(room);
   broadcast(room);
-  maybeStart(room);
 }
 
 export function leave(socket: WebSocket): void {
-  const loc = socketRoom.get(socket);
-  if (!loc) return;
-  const room = rooms.get(loc.roomCode);
-  if (!room) return;
-  const player = room.players.find((p) => p.id === loc.playerId);
-  if (!player || player.socket !== socket) return;
+  const found = locate(socket);
+  if (!found) return;
+  const { room, player } = found;
   if (room.phase !== "waiting") {
     send(socket, { type: "error", message: "The debate already started — you cannot cancel." });
     return;
   }
 
-  room.players = room.players.filter((p) => p.id !== player.id);
-  playerRooms.delete(player.id);
-  socketRoom.delete(socket);
-  player.connected = false;
-  player.socket = null;
+  removePlayer(room, player);
   send(socket, { type: "left" });
   broadcast(room);
   destroyIfEmpty(room);
@@ -445,8 +542,7 @@ export function disconnect(socket: WebSocket): void {
   player.socket = null;
 
   if (room.phase === "waiting") {
-    room.players = room.players.filter((p) => p.id !== player.id);
-    playerRooms.delete(player.id);
+    removePlayer(room, player);
     broadcast(room);
     destroyIfEmpty(room);
     return;

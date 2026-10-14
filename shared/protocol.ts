@@ -1,7 +1,9 @@
 export const QUESTION_MS = 5 * 60 * 1000;
 export const DEBATE_MS = 15 * 60 * 1000;
 export const RECONNECT_MS = 8 * 1000;
-export const MAX_PLAYERS = 2;
+export const MIN_PLAYERS = 2;
+export const MAX_PLAYERS = 10;
+export const DEFAULT_SEATS = 4;
 export const MAX_ANSWER_LENGTH = 600;
 export const MAX_CHAT_LENGTH = 280;
 export const MAX_NICKNAME_LENGTH = 16;
@@ -14,6 +16,7 @@ export type PlayerPublic = {
   color: string;
   connected: boolean;
   hasAnswer: boolean;
+  isHost: boolean;
 };
 
 export type Stance = {
@@ -47,12 +50,17 @@ export type RoomState = {
   messages: ChatMessage[];
   myAnswer: string | null;
   surrender: Surrender | null;
+  hostId: string;
+  seatLimit: number;
 };
 
 export type ClientMessage =
   | { type: "join"; nickname: string; roomCode?: string; playerId: string }
   | { type: "resume"; playerId: string }
   | { type: "leave" }
+  | { type: "start" }
+  | { type: "kick"; playerId: string }
+  | { type: "set_seats"; seats: number }
   | { type: "submit_answer"; text: string }
   | { type: "chat"; text: string }
   | { type: "play_again" };
@@ -63,4 +71,5 @@ export type ServerMessage =
   | { type: "chat"; message: ChatMessage }
   | { type: "opponent_left"; playerId: string; nickname: string }
   | { type: "left" }
+  | { type: "kicked" }
   | { type: "error"; message: string };

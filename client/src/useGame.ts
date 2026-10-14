@@ -84,6 +84,9 @@ export function useGame() {
         setSurrender({ playerId: message.playerId, nickname: message.nickname });
       } else if (message.type === "left") {
         resetToHome();
+      } else if (message.type === "kicked") {
+        resetToHome();
+        setError("The host kicked you out.");
       } else if (message.type === "error") {
         if (resumeAttempt.current) {
           resumeAttempt.current = false;

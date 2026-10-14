@@ -5,7 +5,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { ClientMessage } from "../shared/protocol.ts";
-import { chat, disconnect, join, leave, playAgain, resume, submitAnswer } from "./rooms.ts";
+import {
+  chat,
+  disconnect,
+  join,
+  kick,
+  leave,
+  playAgain,
+  resume,
+  setSeats,
+  startGame,
+  submitAnswer,
+} from "./rooms.ts";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -58,6 +69,15 @@ wss.on("connection", (socket: WebSocket) => {
         break;
       case "leave":
         leave(socket);
+        break;
+      case "start":
+        startGame(socket);
+        break;
+      case "kick":
+        kick(socket, message.playerId);
+        break;
+      case "set_seats":
+        setSeats(socket, message.seats);
         break;
     }
   });

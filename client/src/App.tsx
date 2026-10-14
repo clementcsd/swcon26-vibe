@@ -3,6 +3,9 @@ import {
   MAX_ANSWER_LENGTH,
   MAX_CHAT_LENGTH,
   MAX_NICKNAME_LENGTH,
+  MAX_PLAYERS,
+  MIN_PLAYERS,
+  type PlayerPublic,
   type Surrender,
 } from "../../shared/protocol.ts";
 import { Timer } from "./Timer.tsx";
@@ -12,8 +15,8 @@ export default function App() {
   const game = useGame();
   const { room, status, playerId, surrender } = game;
   const me = room?.players.find((p) => p.id === playerId);
-  const opponent = room?.players.find((p) => p.id !== playerId);
-  const reconnecting = Boolean(opponent && !opponent.connected && !surrender);
+  const dropped = room?.players.filter((p) => p.id !== playerId && !p.connected) ?? [];
+  const reconnecting = dropped.length > 0 && !surrender && room?.phase !== "waiting";
 
   return (
     <div className="arena relative min-h-screen">
@@ -39,13 +42,23 @@ export default function App() {
         {surrender && room ? <SurrenderBanner surrender={surrender} selfId={playerId} /> : null}
         {reconnecting ? (
           <p className="mb-4 rounded-2xl border border-amber-300/30 bg-amber-300/10 px-4 py-3 text-sm text-amber-200">
-            {opponent?.nickname ?? "Opponent"} dropped. Waiting to see if they reconnect…
+            {dropped.map((p) => p.nickname).join(", ")} dropped. Waiting to see if they reconnect…
           </p>
         ) : null}
         {status !== "playing" || !room ? (
           <Home error={game.error} connecting={status === "connecting"} onJoin={game.connect} />
         ) : room.phase === "waiting" ? (
-          <Waiting roomCode={room.code} players={room.players} onCancel={game.cancel} />
+          <Lobby
+            roomCode={room.code}
+            players={room.players}
+            seatLimit={room.seatLimit}
+            playerId={playerId}
+            error={game.error}
+            onCancel={game.cancel}
+            onStart={() => game.send({ type: "start" })}
+            onKick={(id) => game.send({ type: "kick", playerId: id })}
+            onSeats={(seats) => game.send({ type: "set_seats", seats })}
+          />
         ) : room.phase === "question" ? (
           <Question
             roomCode={room.code}
@@ -102,20 +115,20 @@ function Home({
   return (
     <section className="grid gap-10 pt-6 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
       <div>
-        <p className="text-sm uppercase tracking-[0.25em] text-hot">live 1v1</p>
+        <p className="text-sm uppercase tracking-[0.25em] text-hot">live lobby</p>
         <h1 className="mt-3 max-w-xl font-display text-5xl leading-[0.95] sm:text-7xl">
           Drop a take.
           <br />
           Then fight for it.
         </h1>
         <p className="mt-5 max-w-lg text-lg text-white/65">
-          Five minutes to answer one question. Fifteen minutes of chat to debate. No logins — pick a
-          name and jump in, like an .io arena.
+          Open a lobby, invite up to ten voices, then start when you’re ready. Five minutes to
+          answer one question. Fifteen minutes of chat to debate.
         </p>
         <div className="mt-8 flex flex-wrap gap-3 text-sm text-white/50">
           <Pill>5:00 write</Pill>
           <Pill>15:00 debate</Pill>
-          <Pill>2 players</Pill>
+          <Pill>2–10 players</Pill>
         </div>
       </div>
 
@@ -143,7 +156,7 @@ function Home({
           onClick={(e) => submit(e, false)}
           className="glow-btn mt-6 w-full rounded-2xl bg-lime py-3 font-display text-xl text-ink disabled:opacity-60"
         >
-          {connecting ? "joining…" : "play"}
+          {connecting ? "joining…" : "create lobby"}
         </button>
         <button
           type="submit"
@@ -175,46 +188,129 @@ function SurrenderBanner({ surrender, selfId }: { surrender: Surrender; selfId: 
   );
 }
 
-function Waiting({
+function Lobby({
   roomCode,
   players,
+  seatLimit,
+  playerId,
+  error,
   onCancel,
+  onStart,
+  onKick,
+  onSeats,
 }: {
   roomCode: string;
-  players: { id: string; nickname: string; color: string; connected: boolean }[];
+  players: PlayerPublic[];
+  seatLimit: number;
+  playerId: string | null;
+  error: string | null;
   onCancel: () => void;
+  onStart: () => void;
+  onKick: (playerId: string) => void;
+  onSeats: (seats: number) => void;
 }) {
+  const host = players.find((p) => p.id === playerId)?.isHost ?? false;
+  const empty = Math.max(0, seatLimit - players.length);
+  const canStart = players.filter((p) => p.connected).length >= MIN_PLAYERS;
+
   return (
-    <section className="mx-auto max-w-xl pt-10 text-center">
-      <p className="text-sm uppercase tracking-[0.25em] text-white/40">waiting for rival</p>
-      <h2 className="mt-3 font-display text-5xl">Share {roomCode}</h2>
-      <p className="mt-3 text-white/60">
-        The round starts when two players are in the room. Send the code — or wait for matchmaking.
+    <section className="mx-auto max-w-xl pt-6">
+      <p className="text-center text-sm uppercase tracking-[0.25em] text-white/40">lobby</p>
+      <h2 className="mt-3 text-center font-display text-5xl">Share {roomCode}</h2>
+      <p className="mt-3 text-center text-white/60">
+        {host
+          ? "Set the seats, kick anyone you don’t want, then start when the table feels right."
+          : "Waiting for the host to start the debate."}
       </p>
-      <ul className="mt-8 space-y-3">
+
+      {host ? (
+        <div className="mt-6 flex items-center justify-between rounded-2xl border border-line bg-panel px-4 py-3">
+          <span className="text-sm text-white/60">seats</span>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              disabled={seatLimit <= Math.max(MIN_PLAYERS, players.length)}
+              onClick={() => onSeats(seatLimit - 1)}
+              className="h-9 w-9 rounded-xl border border-line text-lg disabled:opacity-30"
+            >
+              −
+            </button>
+            <span className="font-display text-2xl tabular-nums text-lime">
+              {seatLimit}
+              <span className="text-sm text-white/40">/{MAX_PLAYERS}</span>
+            </span>
+            <button
+              type="button"
+              disabled={seatLimit >= MAX_PLAYERS}
+              onClick={() => onSeats(seatLimit + 1)}
+              className="h-9 w-9 rounded-xl border border-line text-lg disabled:opacity-30"
+            >
+              +
+            </button>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-6 text-center text-sm text-white/40">
+          {players.length}/{seatLimit} in the room
+        </p>
+      )}
+
+      <ul className="mt-6 space-y-3">
         {players.map((player) => (
           <li
             key={player.id}
-            className="flex items-center justify-between rounded-2xl border border-line bg-panel px-4 py-3"
+            className="flex items-center justify-between gap-3 rounded-2xl border border-line bg-panel px-4 py-3"
           >
             <span className="font-medium" style={{ color: player.color }}>
               {player.nickname}
+              {player.id === playerId ? " (you)" : ""}
             </span>
-            <span className="text-xs uppercase tracking-widest text-white/40">ready</span>
+            <span className="flex items-center gap-3">
+              {player.isHost ? (
+                <span className="text-xs uppercase tracking-widest text-lime">host</span>
+              ) : (
+                <span className="text-xs uppercase tracking-widest text-white/40">ready</span>
+              )}
+              {host && !player.isHost ? (
+                <button
+                  type="button"
+                  onClick={() => onKick(player.id)}
+                  className="text-xs uppercase tracking-widest text-hot/80 hover:text-hot"
+                >
+                  kick
+                </button>
+              ) : null}
+            </span>
           </li>
         ))}
-        {players.length < 2 ? (
-          <li className="rounded-2xl border border-dashed border-line px-4 py-3 text-white/35">
+        {Array.from({ length: empty }, (_, i) => (
+          <li
+            key={`empty-${i}`}
+            className="rounded-2xl border border-dashed border-line px-4 py-3 text-white/35"
+          >
             empty slot
           </li>
-        ) : null}
+        ))}
       </ul>
+
+      {error ? <p className="mt-4 text-center text-sm text-hot">{error}</p> : null}
+
+      {host ? (
+        <button
+          type="button"
+          disabled={!canStart}
+          onClick={onStart}
+          className="glow-btn mt-8 w-full rounded-2xl bg-lime py-3 font-display text-xl text-ink disabled:opacity-40"
+        >
+          start debate
+        </button>
+      ) : null}
       <button
         type="button"
         onClick={onCancel}
-        className="mt-8 rounded-2xl border border-line px-6 py-3 text-white/70 hover:border-hot/50 hover:text-hot"
+        className="mt-3 w-full rounded-2xl border border-line px-6 py-3 text-white/70 hover:border-hot/50 hover:text-hot"
       >
-        cancel and go home
+        {host ? "cancel lobby" : "leave lobby"}
       </button>
     </section>
   );
@@ -255,7 +351,7 @@ function Question({
         <h2 className="mt-6 font-display text-3xl leading-tight md:text-5xl">{question}</h2>
         {submitted ? (
           <div className="mt-10 rounded-2xl border border-lime/30 bg-lime/10 p-5">
-            <p className="text-lime">Locked in. Waiting for the other player — or the clock.</p>
+            <p className="text-lime">Locked in. Waiting for everyone else — or the clock.</p>
             {lockedText ? (
               <p className="mt-3 whitespace-pre-wrap text-white/80">{lockedText}</p>
             ) : null}
@@ -288,9 +384,9 @@ function Question({
       <aside className="rounded-3xl border border-line bg-panel/70 p-6">
         <h3 className="font-display text-2xl">Rules</h3>
         <ol className="mt-4 space-y-3 text-white/65">
-          <li>1. You cannot see the other take yet.</li>
+          <li>1. You cannot see the other takes yet.</li>
           <li>2. Submit early or ride the 5:00 timer.</li>
-          <li>3. Chat opens for 15 minutes after both sides (or time) are in.</li>
+          <li>3. Chat opens for 15 minutes after everyone (or time) is in.</li>
         </ol>
       </aside>
     </section>
@@ -431,7 +527,7 @@ function Ended({
       >
         rematch
       </button>
-      <p className="mt-3 text-sm text-white/40">Both players need to still be here.</p>
+      <p className="mt-3 text-sm text-white/40">Everyone still here goes back to the lobby.</p>
     </section>
   );
 }
