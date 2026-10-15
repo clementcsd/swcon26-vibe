@@ -42,6 +42,7 @@ type Player = {
   socket: WebSocket | null;
   answer: string | null;
   reconnectTimer: ReturnType<typeof setTimeout> | null;
+  conceded: boolean;
 };
 
 type Room = {
@@ -55,6 +56,7 @@ type Room = {
   surrender: Surrender | null;
   hostId: string;
   seatLimit: number;
+  consensus: boolean;
 };
 
 const rooms = new Map<string, Room>();
@@ -93,6 +95,7 @@ function publicPlayer(room: Room, player: Player): PlayerPublic {
     connected: player.connected,
     hasAnswer: player.answer !== null,
     isHost: player.id === room.hostId,
+    conceded: player.conceded,
   };
 }
 
@@ -129,6 +132,7 @@ export function snapshot(room: Room, viewerId: string): RoomState {
     surrender: room.surrender,
     hostId: room.hostId,
     seatLimit: room.seatLimit,
+    consensus: room.consensus,
   };
 }
 
@@ -173,7 +177,11 @@ function startQuestion(room: Room): void {
   room.phaseEndsAt = Date.now() + QUESTION_MS;
   room.messages = [];
   room.surrender = null;
-  for (const player of room.players) player.answer = null;
+  room.consensus = false;
+  for (const player of room.players) {
+    player.answer = null;
+    player.conceded = false;
+  }
   clearTimer(room);
   room.timer = setTimeout(() => startDebate(room), QUESTION_MS);
   broadcast(room);
@@ -183,17 +191,27 @@ function startDebate(room: Room): void {
   if (room.phase !== "question") return;
   room.phase = "debate";
   room.phaseEndsAt = Date.now() + DEBATE_MS;
+  room.consensus = false;
+  for (const player of room.players) player.conceded = false;
   clearTimer(room);
   room.timer = setTimeout(() => endDebate(room), DEBATE_MS);
   broadcast(room);
 }
 
-function endDebate(room: Room): void {
+function endDebate(room: Room, consensus = false): void {
   if (room.phase !== "debate") return;
   room.phase = "ended";
   room.phaseEndsAt = Date.now();
+  room.consensus = consensus;
   clearTimer(room);
   broadcast(room);
+}
+
+function maybeConsensus(room: Room): void {
+  if (room.phase !== "debate") return;
+  const live = connectedPlayers(room);
+  if (live.length < MIN_PLAYERS) return;
+  if (live.every((player) => player.conceded)) endDebate(room, true);
 }
 
 function maybeAdvanceQuestion(room: Room): void {
@@ -236,6 +254,7 @@ function createRoom(): Room {
     surrender: null,
     hostId: "",
     seatLimit: DEFAULT_SEATS,
+    consensus: false,
   };
   rooms.set(room.code, room);
   return room;
@@ -310,6 +329,12 @@ function forfeit(room: Room, player: Player): void {
     room.phase = "ended";
     room.phaseEndsAt = Date.now();
     clearTimer(room);
+  } else {
+    maybeConsensus(room);
+    if (room.phase === "ended") {
+      destroyIfEmpty(room);
+      return;
+    }
   }
   broadcast(room);
   destroyIfEmpty(room);
@@ -332,6 +357,7 @@ function rejoin(socket: WebSocket, playerId: string): boolean {
   welcome(player, room);
   broadcast(room);
   maybeAdvanceQuestion(room);
+  maybeConsensus(room);
   return true;
 }
 
@@ -388,6 +414,7 @@ export function join(
     socket,
     answer: null,
     reconnectTimer: null,
+    conceded: false,
   };
   room.players.push(player);
   if (!room.hostId) room.hostId = player.id;
@@ -493,6 +520,20 @@ export function chat(socket: WebSocket, text: string): void {
   }
 }
 
+export function concede(socket: WebSocket): void {
+  const found = locate(socket);
+  if (!found) return;
+  const { room, player } = found;
+  if (room.phase !== "debate" || room.surrender) return;
+  if (player.conceded) {
+    broadcast(room);
+    return;
+  }
+  player.conceded = true;
+  broadcast(room);
+  maybeConsensus(room);
+}
+
 export function playAgain(socket: WebSocket): void {
   const found = locate(socket);
   if (!found) return;
@@ -500,12 +541,16 @@ export function playAgain(socket: WebSocket): void {
   if (room.phase !== "ended") return;
 
   room.players = room.players.filter((p) => p.connected);
-  for (const player of room.players) player.answer = null;
+  for (const player of room.players) {
+    player.answer = null;
+    player.conceded = false;
+  }
   room.messages = [];
   room.phase = "waiting";
   room.phaseEndsAt = null;
   room.question = "";
   room.surrender = null;
+  room.consensus = false;
   if (!room.players.some((p) => p.id === room.hostId)) promoteHost(room);
   if (room.seatLimit < connectedPlayers(room).length) {
     room.seatLimit = Math.min(MAX_PLAYERS, connectedPlayers(room).length);

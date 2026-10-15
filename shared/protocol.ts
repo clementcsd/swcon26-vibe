@@ -17,6 +17,7 @@ export type PlayerPublic = {
   connected: boolean;
   hasAnswer: boolean;
   isHost: boolean;
+  conceded: boolean;
 };
 
 export type Stance = {
@@ -52,6 +53,7 @@ export type RoomState = {
   surrender: Surrender | null;
   hostId: string;
   seatLimit: number;
+  consensus: boolean;
 };
 
 export type ClientMessage =
@@ -63,6 +65,7 @@ export type ClientMessage =
   | { type: "set_seats"; seats: number }
   | { type: "submit_answer"; text: string }
   | { type: "chat"; text: string }
+  | { type: "concede" }
   | { type: "play_again" };
 
 export type ServerMessage =

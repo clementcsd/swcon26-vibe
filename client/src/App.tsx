@@ -75,15 +75,18 @@ export default function App() {
             endsAt={room.phaseEndsAt}
             stances={room.stances}
             messages={room.messages}
+            players={room.players}
             playerId={playerId}
             locked={Boolean(surrender)}
             onChat={(text) => game.send({ type: "chat", text })}
+            onConcede={() => game.send({ type: "concede" })}
           />
         ) : (
           <Ended
             question={room.question}
             stances={room.stances}
             surrender={surrender}
+            consensus={room.consensus}
             selfId={playerId}
             onAgain={() => game.send({ type: "play_again" })}
           />
@@ -398,17 +401,21 @@ function Debate({
   endsAt,
   stances,
   messages,
+  players,
   playerId,
   locked,
   onChat,
+  onConcede,
 }: {
   question: string;
   endsAt: number | null;
   stances: { playerId: string; nickname: string; color: string; text: string }[];
   messages: { id: string; playerId: string; nickname: string; color: string; text: string }[];
+  players: PlayerPublic[];
   playerId: string | null;
   locked: boolean;
   onChat: (text: string) => void;
+  onConcede: () => void;
 }) {
   const [text, setText] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
@@ -484,8 +491,43 @@ function Debate({
             send
           </button>
         </form>
+        <ConcedeBar players={players} playerId={playerId} locked={locked} onConcede={onConcede} />
       </div>
     </section>
+  );
+}
+
+function ConcedeBar({
+  players,
+  playerId,
+  locked,
+  onConcede,
+}: {
+  players: PlayerPublic[];
+  playerId: string | null;
+  locked: boolean;
+  onConcede: () => void;
+}) {
+  const me = players.find((p) => p.id === playerId);
+  const live = players.filter((p) => p.connected);
+  const agreed = live.filter((p) => p.conceded);
+  const waiting = live.filter((p) => !p.conceded && p.id !== playerId);
+
+  return (
+    <div className="border-t border-line px-3 py-3">
+      <button
+        type="button"
+        disabled={locked || Boolean(me?.conceded)}
+        onClick={onConcede}
+        className="w-full rounded-xl border border-lime/40 bg-lime/10 py-2 font-display text-lime disabled:opacity-40"
+      >
+        {me?.conceded ? "you agreed" : "Agree / Concede"}
+      </button>
+      <p className="mt-2 text-center text-xs text-white/40">
+        {agreed.length}/{live.length} ready to end
+        {waiting.length > 0 ? ` — waiting on ${waiting.map((p) => p.nickname).join(", ")}` : ""}
+      </p>
+    </div>
   );
 }
 
@@ -493,20 +535,24 @@ function Ended({
   question,
   stances,
   surrender,
+  consensus,
   selfId,
   onAgain,
 }: {
   question: string;
   stances: { playerId: string; nickname: string; color: string; text: string }[];
   surrender: Surrender | null;
+  consensus: boolean;
   selfId: string | null;
   onAgain: () => void;
 }) {
-  const label = surrender
-    ? surrender.playerId === selfId
-      ? "you surrendered"
-      : `${surrender.nickname} surrendered`
-    : "time’s up";
+  const label = consensus
+    ? "consensus"
+    : surrender
+      ? surrender.playerId === selfId
+        ? "you surrendered"
+        : `${surrender.nickname} surrendered`
+      : "time’s up";
   return (
     <section className="mx-auto max-w-3xl pt-6 text-center">
       <p className="text-sm uppercase tracking-[0.25em] text-white/40">{label}</p>

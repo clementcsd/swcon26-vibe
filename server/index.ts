@@ -7,6 +7,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type { ClientMessage } from "../shared/protocol.ts";
 import {
   chat,
+  concede,
   disconnect,
   join,
   kick,
@@ -63,6 +64,9 @@ wss.on("connection", (socket: WebSocket) => {
         break;
       case "chat":
         chat(socket, message.text);
+        break;
+      case "concede":
+        concede(socket);
         break;
       case "play_again":
         playAgain(socket);
