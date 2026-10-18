@@ -75,4 +75,5 @@ export type ServerMessage =
   | { type: "opponent_left"; playerId: string; nickname: string }
   | { type: "left" }
   | { type: "kicked" }
+  | { type: "censored"; warning: string }
   | { type: "error"; message: string };

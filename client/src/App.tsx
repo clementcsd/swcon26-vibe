@@ -13,7 +13,7 @@ import { useGame } from "./useGame.ts";
 
 export default function App() {
   const game = useGame();
-  const { room, status, playerId, surrender } = game;
+  const { room, status, playerId, surrender, warning } = game;
   const me = room?.players.find((p) => p.id === playerId);
   const dropped = room?.players.filter((p) => p.id !== playerId && !p.connected) ?? [];
   const reconnecting = dropped.length > 0 && !surrender && room?.phase !== "waiting";
@@ -78,6 +78,7 @@ export default function App() {
             players={room.players}
             playerId={playerId}
             locked={Boolean(surrender)}
+            warning={warning}
             onChat={(text) => game.send({ type: "chat", text })}
             onConcede={() => game.send({ type: "concede" })}
           />
@@ -404,6 +405,7 @@ function Debate({
   players,
   playerId,
   locked,
+  warning,
   onChat,
   onConcede,
 }: {
@@ -414,6 +416,7 @@ function Debate({
   players: PlayerPublic[];
   playerId: string | null;
   locked: boolean;
+  warning: string | null;
   onChat: (text: string) => void;
   onConcede: () => void;
 }) {
@@ -479,6 +482,9 @@ function Debate({
             ))
           )}
         </div>
+        {warning ? (
+          <p className="border-t border-hot/30 bg-hot/10 px-3 py-2 text-xs text-hot">{warning}</p>
+        ) : null}
         <form onSubmit={submit} className="flex gap-2 border-t border-line p-3">
           <input
             value={text}

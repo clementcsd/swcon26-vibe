@@ -41,6 +41,7 @@ export function useGame() {
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [room, setRoom] = useState<RoomState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [surrender, setSurrender] = useState<Surrender | null>(null);
 
   const updateStatus = (next: Status) => {
@@ -54,6 +55,7 @@ export function useGame() {
     setRoom(null);
     setSurrender(null);
     setError(null);
+    setWarning(null);
     updateStatus("idle");
   }, []);
 
@@ -97,6 +99,8 @@ export function useGame() {
       } else if (message.type === "kicked") {
         resetToHome();
         setError("The host kicked you out.");
+      } else if (message.type === "censored") {
+        setWarning(message.warning);
       } else if (message.type === "error") {
         if (resumeAttempt.current) {
           resumeAttempt.current = false;
@@ -155,5 +159,5 @@ export function useGame() {
     return () => socketRef.current?.close();
   }, []);
 
-  return { status, playerId, room, error, surrender, connect, cancel, send, setError };
+  return { status, playerId, room, error, warning, surrender, connect, cancel, send, setError };
 }

@@ -18,6 +18,7 @@ import {
   type Surrender,
 } from "../shared/protocol.ts";
 import { pickQuestion } from "./questions.ts";
+import { censorText } from "../shared/censor.ts";
 
 const COLORS = [
   "#22d3ee",
@@ -502,8 +503,9 @@ export function chat(socket: WebSocket, text: string): void {
   const { room, player } = found;
   if (room.phase !== "debate" || room.surrender) return;
 
-  const body = text.trim().slice(0, MAX_CHAT_LENGTH);
-  if (!body) return;
+  const raw = text.trim().slice(0, MAX_CHAT_LENGTH);
+  if (!raw) return;
+  const { text: body, hit } = censorText(raw);
 
   const message: ChatMessage = {
     id: crypto.randomUUID(),
@@ -517,6 +519,12 @@ export function chat(socket: WebSocket, text: string): void {
   if (room.messages.length > 200) room.messages.splice(0, room.messages.length - 200);
   for (const p of room.players) {
     send(p.socket, { type: "chat", message });
+  }
+  if (hit) {
+    send(player.socket, {
+      type: "censored",
+      warning: "Watch your language — forbidden words were replaced with asterisks.",
+    });
   }
 }
 
