@@ -13,6 +13,7 @@ import {
   kick,
   leave,
   playAgain,
+  report,
   resume,
   setSeats,
   startGame,
@@ -82,6 +83,9 @@ wss.on("connection", (socket: WebSocket) => {
         break;
       case "set_seats":
         setSeats(socket, message.seats);
+        break;
+      case "report":
+        report(socket, message.playerId);
         break;
     }
   });

@@ -57,6 +57,7 @@ export default function App() {
             onCancel={game.cancel}
             onStart={() => game.send({ type: "start" })}
             onKick={(id) => game.send({ type: "kick", playerId: id })}
+            onReport={(id) => game.send({ type: "report", playerId: id })}
             onSeats={(seats) => game.send({ type: "set_seats", seats })}
           />
         ) : room.phase === "question" ? (
@@ -81,6 +82,7 @@ export default function App() {
             warning={warning}
             onChat={(text) => game.send({ type: "chat", text })}
             onConcede={() => game.send({ type: "concede" })}
+            onReport={(id) => game.send({ type: "report", playerId: id })}
           />
         ) : (
           <Ended
@@ -192,6 +194,25 @@ function SurrenderBanner({ surrender, selfId }: { surrender: Surrender; selfId: 
   );
 }
 
+function ReportButton({
+  reported,
+  onReport,
+}: {
+  reported: boolean;
+  onReport: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={reported}
+      onClick={onReport}
+      className="text-xs uppercase tracking-widest text-white/40 hover:text-hot disabled:text-hot/50"
+    >
+      {reported ? "reported" : "report"}
+    </button>
+  );
+}
+
 function Lobby({
   roomCode,
   players,
@@ -201,6 +222,7 @@ function Lobby({
   onCancel,
   onStart,
   onKick,
+  onReport,
   onSeats,
 }: {
   roomCode: string;
@@ -211,6 +233,7 @@ function Lobby({
   onCancel: () => void;
   onStart: () => void;
   onKick: (playerId: string) => void;
+  onReport: (playerId: string) => void;
   onSeats: (seats: number) => void;
 }) {
   const host = players.find((p) => p.id === playerId)?.isHost ?? false;
@@ -275,6 +298,9 @@ function Lobby({
               ) : (
                 <span className="text-xs uppercase tracking-widest text-white/40">ready</span>
               )}
+              {player.id !== playerId ? (
+                <ReportButton reported={player.youReported} onReport={() => onReport(player.id)} />
+              ) : null}
               {host && !player.isHost ? (
                 <button
                   type="button"
@@ -408,6 +434,7 @@ function Debate({
   warning,
   onChat,
   onConcede,
+  onReport,
 }: {
   question: string;
   endsAt: number | null;
@@ -419,6 +446,7 @@ function Debate({
   warning: string | null;
   onChat: (text: string) => void;
   onConcede: () => void;
+  onReport: (playerId: string) => void;
 }) {
   const [text, setText] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
@@ -447,10 +475,18 @@ function Debate({
         <div className="grid gap-4">
           {stances.map((stance) => (
             <article key={stance.playerId} className="rounded-3xl border border-line bg-panel p-5">
-              <p className="text-sm font-semibold" style={{ color: stance.color }}>
-                {stance.nickname}
-                {stance.playerId === playerId ? " (you)" : ""}
-              </p>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-semibold" style={{ color: stance.color }}>
+                  {stance.nickname}
+                  {stance.playerId === playerId ? " (you)" : ""}
+                </p>
+                {stance.playerId !== playerId ? (
+                  <ReportButton
+                    reported={Boolean(players.find((p) => p.id === stance.playerId)?.youReported)}
+                    onReport={() => onReport(stance.playerId)}
+                  />
+                ) : null}
+              </div>
               <p className="mt-2 whitespace-pre-wrap text-white/80">{stance.text}</p>
             </article>
           ))}
@@ -474,9 +510,17 @@ function Debate({
                   message.playerId === playerId ? "ml-auto bg-lime/15" : "bg-ink"
                 }`}
               >
-                <p className="text-xs font-semibold" style={{ color: message.color }}>
-                  {message.nickname}
-                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold" style={{ color: message.color }}>
+                    {message.nickname}
+                  </p>
+                  {message.playerId !== playerId ? (
+                    <ReportButton
+                      reported={Boolean(players.find((p) => p.id === message.playerId)?.youReported)}
+                      onReport={() => onReport(message.playerId)}
+                    />
+                  ) : null}
+                </div>
                 <p className="text-sm text-white/90">{message.text}</p>
               </div>
             ))

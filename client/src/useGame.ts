@@ -98,7 +98,11 @@ export function useGame() {
         resetToHome();
       } else if (message.type === "kicked") {
         resetToHome();
-        setError("The host kicked you out.");
+        setError(
+          message.reason === "reports"
+            ? "You were kicked after too many reports."
+            : "The host kicked you out.",
+        );
       } else if (message.type === "censored") {
         setWarning(message.warning);
       } else if (message.type === "error") {

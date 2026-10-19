@@ -7,6 +7,7 @@ export const DEFAULT_SEATS = 4;
 export const MAX_ANSWER_LENGTH = 600;
 export const MAX_CHAT_LENGTH = 280;
 export const MAX_NICKNAME_LENGTH = 16;
+export const REPORT_LIMIT = 4;
 
 export type Phase = "waiting" | "question" | "debate" | "ended";
 
@@ -18,6 +19,7 @@ export type PlayerPublic = {
   hasAnswer: boolean;
   isHost: boolean;
   conceded: boolean;
+  youReported: boolean;
 };
 
 export type Stance = {
@@ -66,6 +68,7 @@ export type ClientMessage =
   | { type: "submit_answer"; text: string }
   | { type: "chat"; text: string }
   | { type: "concede" }
+  | { type: "report"; playerId: string }
   | { type: "play_again" };
 
 export type ServerMessage =
@@ -74,6 +77,6 @@ export type ServerMessage =
   | { type: "chat"; message: ChatMessage }
   | { type: "opponent_left"; playerId: string; nickname: string }
   | { type: "left" }
-  | { type: "kicked" }
+  | { type: "kicked"; reason?: "host" | "reports" }
   | { type: "censored"; warning: string }
   | { type: "error"; message: string };

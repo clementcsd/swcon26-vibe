@@ -9,6 +9,7 @@ import {
   MIN_PLAYERS,
   QUESTION_MS,
   RECONNECT_MS,
+  REPORT_LIMIT,
   type ChatMessage,
   type Phase,
   type PlayerPublic,
@@ -58,6 +59,7 @@ type Room = {
   hostId: string;
   seatLimit: number;
   consensus: boolean;
+  reports: Map<string, Set<string>>;
 };
 
 const rooms = new Map<string, Room>();
@@ -88,7 +90,7 @@ function connectedPlayers(room: Room): Player[] {
   return room.players.filter((player) => player.connected);
 }
 
-function publicPlayer(room: Room, player: Player): PlayerPublic {
+function publicPlayer(room: Room, player: Player, viewerId: string): PlayerPublic {
   return {
     id: player.id,
     nickname: player.nickname,
@@ -97,6 +99,7 @@ function publicPlayer(room: Room, player: Player): PlayerPublic {
     hasAnswer: player.answer !== null,
     isHost: player.id === room.hostId,
     conceded: player.conceded,
+    youReported: room.reports.get(player.id)?.has(viewerId) ?? false,
   };
 }
 
@@ -126,7 +129,7 @@ export function snapshot(room: Room, viewerId: string): RoomState {
     phase: room.phase,
     question: room.question,
     phaseEndsAt: room.phaseEndsAt,
-    players: room.players.map((player) => publicPlayer(room, player)),
+    players: room.players.map((player) => publicPlayer(room, player, viewerId)),
     stances: stancesFor(room, viewerId),
     messages: messagesFor(room),
     myAnswer: viewer?.answer ?? null,
@@ -169,7 +172,37 @@ function removePlayer(room: Room, player: Player): void {
   if (player.socket) socketRoom.delete(player.socket);
   player.connected = false;
   player.socket = null;
+  room.reports.delete(player.id);
+  for (const reporters of room.reports.values()) reporters.delete(player.id);
   if (room.hostId === player.id) promoteHost(room);
+}
+
+function finishAfterEject(room: Room, playerId: string, nickname: string): void {
+  if (room.phase === "waiting" || room.phase === "ended") {
+    broadcast(room);
+    destroyIfEmpty(room);
+    return;
+  }
+  const live = connectedPlayers(room);
+  if (live.length < MIN_PLAYERS) {
+    room.surrender = { playerId, nickname };
+    room.phase = "ended";
+    room.phaseEndsAt = Date.now();
+    clearTimer(room);
+  } else {
+    maybeAdvanceQuestion(room);
+    maybeConsensus(room);
+  }
+  broadcast(room);
+  destroyIfEmpty(room);
+}
+
+function ejectPlayer(room: Room, target: Player, reason: "host" | "reports"): void {
+  const targetSocket = target.socket;
+  const { id, nickname } = target;
+  removePlayer(room, target);
+  send(targetSocket, { type: "kicked", reason });
+  finishAfterEject(room, id, nickname);
 }
 
 function startQuestion(room: Room): void {
@@ -256,6 +289,7 @@ function createRoom(): Room {
     hostId: "",
     seatLimit: DEFAULT_SEATS,
     consensus: false,
+    reports: new Map(),
   };
   rooms.set(room.code, room);
   return room;
@@ -474,11 +508,32 @@ export function kick(socket: WebSocket, targetId: string): void {
   }
   const target = room.players.find((p) => p.id === targetId);
   if (!target) return;
-  const targetSocket = target.socket;
-  removePlayer(room, target);
-  send(targetSocket, { type: "kicked" });
+  ejectPlayer(room, target, "host");
+}
+
+export function report(socket: WebSocket, targetId: string): void {
+  const found = locate(socket);
+  if (!found) return;
+  const { room, player } = found;
+  if (targetId === player.id) {
+    send(socket, { type: "error", message: "You can’t report yourself." });
+    return;
+  }
+  const target = room.players.find((p) => p.id === targetId);
+  if (!target) return;
+
+  let reporters = room.reports.get(targetId);
+  if (!reporters) {
+    reporters = new Set();
+    room.reports.set(targetId, reporters);
+  }
+  if (reporters.has(player.id)) return;
+  reporters.add(player.id);
+  if (reporters.size > REPORT_LIMIT) {
+    ejectPlayer(room, target, "reports");
+    return;
+  }
   broadcast(room);
-  destroyIfEmpty(room);
 }
 
 export function submitAnswer(socket: WebSocket, text: string): void {
@@ -559,6 +614,7 @@ export function playAgain(socket: WebSocket): void {
   room.question = "";
   room.surrender = null;
   room.consensus = false;
+  room.reports = new Map();
   if (!room.players.some((p) => p.id === room.hostId)) promoteHost(room);
   if (room.seatLimit < connectedPlayers(room).length) {
     room.seatLimit = Math.min(MAX_PLAYERS, connectedPlayers(room).length);
