@@ -272,8 +272,16 @@ function sanitizeNick(raw: string): string {
   return nick.length >= 2 ? nick : "";
 }
 
+export function sanitizeNickPublic(raw: string): string {
+  return sanitizeNick(raw);
+}
+
 function validPlayerId(id: string | undefined): id is string {
   return Boolean(id && PLAYER_ID_RE.test(id));
+}
+
+export function validPlayerIdPublic(id: string | undefined): boolean {
+  return validPlayerId(id);
 }
 
 function createRoom(): Room {
