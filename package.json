@@ -9,7 +9,13 @@
     "dev:client": "vite",
     "build": "vite build",
     "start": "tsx server/index.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.ts",
+    "test:e2e": "vitest run --config vitest.e2e.ts",
+    "test:ci": "vitest run && vitest run --config vitest.integration.ts",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "express": "^5.1.0",

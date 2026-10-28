@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { censorText } from "./censor";
+import { censorText } from "../../../shared/censor";
 
 describe("censorText", () => {
   it("censors forbidden words", () => {
