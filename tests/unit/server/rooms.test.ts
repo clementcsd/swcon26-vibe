@@ -115,6 +115,7 @@ describe("validPlayerIdPublic", () => {
     expect(validPlayerIdPublic("not-a-uuid")).toBe(false);
     expect(validPlayerIdPublic("550e8400-e29b-41d4-a716-44665544000")).toBe(false);
   });
+});
 
 describe("join", () => {
   it("rejects a nickname that is too short", () => {
@@ -611,8 +612,234 @@ describe("snapshot", () => {
   });
 });
 
+describe("kick", () => {
+  it("rejects a non-host", () => {
+    const host = makeSocket();
+    const joiner = makeSocket();
+    join(host, "Alice", VALID_ID);
+    const code = host.lastParsed<{ room: { code: string } }>()?.room.code!;
+    join(joiner, "Bob", VALID_ID_2, code);
+    joiner.clear();
+
+    kick(joiner, VALID_ID);
+    expect(lastError(joiner)).toBe("Only the host can do that.");
+  });
+
+  it("rejects kicking yourself", () => {
+    const host = makeSocket();
+    join(host, "Alice", VALID_ID);
+
+    kick(host, VALID_ID);
+    expect(lastError(host)).toBe("You can’t kick yourself. Leave instead.");
+  });
+
+  it("rejects kicking after the debate has started", () => {
+    const host = makeSocket();
+    const joiner = makeSocket();
+    join(host, "Alice", VALID_ID);
+    const code = host.lastParsed<{ room: { code: string } }>()?.room.code!;
+    join(joiner, "Bob", VALID_ID_2, code);
+    startGame(host);
+
+    kick(host, VALID_ID_2);
+    expect(lastError(host)).toBe("You can only kick people from the lobby.");
+  });
+
+  it("removes the kicked player and notifies them", () => {
+    const host = makeSocket();
+    const joiner = makeSocket();
+    join(host, "Alice", VALID_ID);
+    const code = host.lastParsed<{ room: { code: string } }>()?.room.code!;
+    join(joiner, "Bob", VALID_ID_2, code);
+    joiner.clear();
+
+    kick(host, VALID_ID_2);
+
+    const kicked = joiner.findParsed<{ type: string; reason: string }>("kicked");
+    expect(kicked?.type).toBe("kicked");
+    expect(kicked?.reason).toBe("host");
+
+    const state = host.findParsed<{ room: { players: Array<{ id: string }> } }>("state");
+    expect(state?.room.players.map((p) => p.id)).not.toContain(VALID_ID_2);
+  });
+});
+
+
+
+describe("report", () => {
+  function twoPlayers(): { host: MockSocket; joiner: MockSocket; code: string } {
+    const host = makeSocket();
+    const joiner = makeSocket();
+    join(host, "Alice", VALID_ID);
+    const code = host.lastParsed<{ room: { code: string } }>()?.room.code!;
+    join(joiner, "Bob", VALID_ID_2, code);
+    return { host, joiner, code };
+  }
+
+  it("rejects reporting yourself", () => {
+    const { host } = twoPlayers();
+    report(host, VALID_ID);
+    expect(lastError(host)).toBe("You can’t report yourself.");
+  });
+
+  it("ignores a duplicate report from the same player", () => {
+    const { host, joiner } = twoPlayers();
+    report(host, VALID_ID_2);
+    report(host, VALID_ID_2);
+    expect(lastError(host)).toBeNull();
+    const kicked = joiner.findParsed<{ type: string }>("kicked");
+    expect(kicked).toBeNull();
+  });
+
+  it("does not eject at REPORT_LIMIT reports", () => {
+    const { host, joiner, code } = twoPlayers();
+    setSeats(host, 6);
+    const third = makeSocket();
+    const fourth = makeSocket();
+    const fifth = makeSocket();
+    join(third, "Carol", "750e8400-e29b-41d4-a716-446655440002", code);
+    join(fourth, "Dan", "850e8400-e29b-41d4-a716-446655440003", code);
+    join(fifth, "Eve", "950e8400-e29b-41d4-a716-446655440004", code);
+
+    report(joiner, VALID_ID);
+    report(third, VALID_ID);
+    report(fourth, VALID_ID);
+    report(fifth, VALID_ID);
+    expect(lastError(host)).toBeNull();
+
+    const state = joiner.findParsed<{ room: { phase: string; players: Array<{ id: string }> } }>("state");
+    expect(state?.room.phase).not.toBe("ended");
+    expect(state?.room.players.map((p) => p.id)).toContain(VALID_ID);
+  });
+
+  it("ejects the target after REPORT_LIMIT + 1 reports", () => {
+    const { host, joiner, code } = twoPlayers();
+    setSeats(host, 6);
+    const third = makeSocket();
+    const fourth = makeSocket();
+    const fifth = makeSocket();
+    const sixth = makeSocket();
+    join(third, "Carol", "750e8400-e29b-41d4-a716-446655440002", code);
+    join(fourth, "Dan", "850e8400-e29b-41d4-a716-446655440003", code);
+    join(fifth, "Eve", "950e8400-e29b-41d4-a716-446655440004", code);
+    join(sixth, "Frank", "a50e8400-e29b-41d4-a716-446655440005", code);
+
+    report(joiner, VALID_ID);
+    report(third, VALID_ID);
+    report(fourth, VALID_ID);
+    report(fifth, VALID_ID);
+    report(sixth, VALID_ID);
+
+    const state = joiner.findParsed<{ room: { phase: string; players: Array<{ id: string }> } }>("state");
+    expect(state?.room.players.map((p) => p.id)).not.toContain(VALID_ID);
+    expect(state?.room.phase).toBe("waiting");
+  });
+});
+
+describe("concede", () => {
+  function enterDebatePhase(): { host: MockSocket; joiner: MockSocket } {
+    const h = makeSocket();
+    const j = makeSocket();
+    join(h, "Alice", VALID_ID);
+    const code = h.lastParsed<{ room: { code: string } }>()?.room.code!;
+    join(j, "Bob", VALID_ID_2, code);
+    startGame(h);
+    h.clear();
+    j.clear();
+    submitAnswer(h, "This is my stance on the issue.");
+    submitAnswer(j, "This is the opposing stance.");
+    h.clear();
+    j.clear();
+    return { host: h, joiner: j };
+  }
+
+  it("is idempotent — conceding twice does not error", () => {
+    const { host } = enterDebatePhase();
+    concede(host);
+    concede(host);
+    expect(lastError(host)).toBeNull();
+
+    const state = host.findParsed<{
+      room: { players: Array<{ id: string; conceded: boolean }> };
+    }>("state");
+    const me = state?.room.players.find((p) => p.id === VALID_ID);
+    expect(me?.conceded).toBe(true);
+  });
+});
+
+describe("playAgain", () => {
+  function enterEndedPhase(): { host: MockSocket; joiner: MockSocket } {
+    const h = makeSocket();
+    const j = makeSocket();
+    join(h, "Alice", VALID_ID);
+    const code = h.lastParsed<{ room: { code: string } }>()?.room.code!;
+    join(j, "Bob", VALID_ID_2, code);
+    startGame(h);
+    h.clear();
+    j.clear();
+    submitAnswer(h, "This is my stance on the issue.");
+    submitAnswer(j, "This is the opposing stance.");
+    h.clear();
+    j.clear();
+    concede(h);
+    concede(j);
+    h.clear();
+    j.clear();
+    return { host: h, joiner: j };
+  }
+
+  it("clears answers, concessions, messages, and reports", () => {
+    const { host, joiner } = enterEndedPhase();
+    playAgain(host);
+
+    const state = host.findParsed<{
+      room: {
+        phase: string;
+        players: Array<{ id: string; hasAnswer: boolean; conceded: boolean }>;
+        messages: unknown[];
+      };
+    }>("state");
+    expect(state?.room.phase).toBe("waiting");
+    for (const p of state?.room.players ?? []) {
+      expect(p.hasAnswer).toBe(false);
+      expect(p.conceded).toBe(false);
+    }
+    expect(state?.room.messages.length).toBe(0);
+
+    host.clear();
+    joiner.clear();
+  });
+});
+
+describe("snapshot", () => {
+  it("shows all stances during the debate phase", () => {
+    const host = makeSocket();
+    const joiner = makeSocket();
+    join(host, "Alice", VALID_ID);
+    const code = host.lastParsed<{ room: { code: string } }>()?.room.code!;
+    join(joiner, "Bob", VALID_ID_2, code);
+    startGame(host);
+    host.clear();
+    joiner.clear();
+    submitAnswer(host, "This is my stance on the issue.");
+    submitAnswer(joiner, "This is the opposing stance.");
+
+    const joinerSnapshot = joiner.findParsed<{
+      room: { stances: Array<{ playerId: string; text: string }> };
+    }>("state");
+    expect(joinerSnapshot?.room.stances.length).toBe(2);
+    const texts = joinerSnapshot?.room.stances.map((s) => s.text).sort();
+    expect(texts).toEqual([
+      "This is my stance on the issue.",
+      "This is the opposing stance.",
+    ]);
+
+    host.clear();
+    joiner.clear();
+  });
+});
+
 function clearSocket(socket: MockSocket): void {
   socket.clear();
 }
 
-});

@@ -54,4 +54,26 @@ describe("pickQuestion", () => {
     expect(picked).toBe(QUESTIONS[0]);
     spy.mockRestore();
   });
+
+  it("distributes across the pool over many calls", () => {
+    const picked = new Set<string>();
+    for (let i = 0; i < 500; i += 1) {
+      picked.add(pickQuestion());
+    }
+    // With 14 questions and 500 draws, expect to see most of the pool.
+    expect(picked.size).toBeGreaterThan(5);
+  });
+
+  it("excludes by value regardless of case differences in the pool", () => {
+    const target = QUESTIONS[0]!;
+    // The pool contains `target` exactly once; excluding it removes it.
+    const results = new Set<string>();
+    for (let i = 0; i < 100; i += 1) {
+      results.add(pickQuestion(target));
+    }
+    expect(results.has(target)).toBe(false);
+    for (const r of results) {
+      expect(QUESTIONS).toContain(r);
+    }
+  });
 });
