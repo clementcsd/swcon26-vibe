@@ -1,4 +1,3 @@
-import { WebSocket } from "ws";
 import {
   DEBATE_MS,
   DEFAULT_SEATS,
@@ -21,6 +20,19 @@ import {
 import { pickQuestion } from "./questions.ts";
 import { censorText } from "../shared/censor.ts";
 
+/** Minimal socket surface rooms.ts depends on. Lets tests substitute an
+ * in-memory mock instead of a real `ws.WebSocket`. */
+export interface SocketLike {
+  readyState: number;
+  send(data: string): void;
+  close(): void;
+  on(event: string, handler: (...args: unknown[]) => void): void;
+  removeListener?(): void;
+}
+
+/** Mirrors `ws.WebSocket.OPEN` so callers can compare against a number. */
+export const SOCKET_OPEN = 1;
+
 const COLORS = [
   "#22d3ee",
   "#f472b6",
@@ -41,7 +53,7 @@ type Player = {
   nickname: string;
   color: string;
   connected: boolean;
-  socket: WebSocket | null;
+  socket: SocketLike | null;
   answer: string | null;
   reconnectTimer: ReturnType<typeof setTimeout> | null;
   conceded: boolean;
@@ -64,7 +76,14 @@ type Room = {
 
 const rooms = new Map<string, Room>();
 const playerRooms = new Map<string, string>();
-const socketRoom = new WeakMap<WebSocket, { roomCode: string; playerId: string }>();
+let socketRoom = new WeakMap<SocketLike, { roomCode: string; playerId: string }>();
+
+/** Clears all module-level state. Intended for test isolation between suites. */
+export function resetState(): void {
+  rooms.clear();
+  playerRooms.clear();
+  socketRoom = new WeakMap();
+}
 
 function code(): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -81,8 +100,8 @@ function uniqueCode(): string {
   return next;
 }
 
-function send(socket: WebSocket | null, message: ServerMessage): void {
-  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+function send(socket: SocketLike | null, message: ServerMessage): void {
+  if (!socket || socket.readyState !== SOCKET_OPEN) return;
   socket.send(JSON.stringify(message));
 }
 
@@ -303,14 +322,14 @@ function createRoom(): Room {
   return room;
 }
 
-function attach(socket: WebSocket, room: Room, player: Player): void {
+function attach(socket: SocketLike, room: Room, player: Player): void {
   const previous = player.socket;
   clearReconnect(player);
   player.socket = socket;
   player.connected = true;
   socketRoom.set(socket, { roomCode: room.code, playerId: player.id });
   playerRooms.set(player.id, room.code);
-  if (previous && previous !== socket && previous.readyState === WebSocket.OPEN) {
+  if (previous && previous !== socket && previous.readyState === SOCKET_OPEN) {
     previous.close();
   }
 }
@@ -320,7 +339,7 @@ function welcome(player: Player, room: Room): void {
 }
 
 function locate(
-  socket: WebSocket,
+  socket: SocketLike,
 ): { room: Room; player: Player } | null {
   const loc = socketRoom.get(socket);
   if (!loc) return null;
@@ -331,7 +350,7 @@ function locate(
   return { room, player };
 }
 
-function requireHost(socket: WebSocket): { room: Room; player: Player } | null {
+function requireHost(socket: SocketLike): { room: Room; player: Player } | null {
   const found = locate(socket);
   if (!found) return null;
   if (found.player.id !== found.room.hostId) {
@@ -383,7 +402,7 @@ function forfeit(room: Room, player: Player): void {
   destroyIfEmpty(room);
 }
 
-function rejoin(socket: WebSocket, playerId: string): boolean {
+function rejoin(socket: SocketLike, playerId: string): boolean {
   const roomCode = playerRooms.get(playerId);
   if (!roomCode) return false;
   const room = rooms.get(roomCode);
@@ -404,14 +423,14 @@ function rejoin(socket: WebSocket, playerId: string): boolean {
   return true;
 }
 
-export function resume(socket: WebSocket, playerId: string): void {
+export function resume(socket: SocketLike, playerId: string): void {
   if (!validPlayerId(playerId) || !rejoin(socket, playerId)) {
     send(socket, { type: "error", message: "No active debate to restore." });
   }
 }
 
 export function join(
-  socket: WebSocket,
+  socket: SocketLike,
   nickname: string,
   playerId: string,
   roomCode?: string,
@@ -466,7 +485,7 @@ export function join(
   broadcast(room);
 }
 
-export function startGame(socket: WebSocket): void {
+export function startGame(socket: SocketLike): void {
   const found = requireHost(socket);
   if (!found) return;
   const { room } = found;
@@ -481,7 +500,7 @@ export function startGame(socket: WebSocket): void {
   startQuestion(room);
 }
 
-export function setSeats(socket: WebSocket, seats: number): void {
+export function setSeats(socket: SocketLike, seats: number): void {
   const found = requireHost(socket);
   if (!found) return;
   const { room } = found;
@@ -502,7 +521,7 @@ export function setSeats(socket: WebSocket, seats: number): void {
   broadcast(room);
 }
 
-export function kick(socket: WebSocket, targetId: string): void {
+export function kick(socket: SocketLike, targetId: string): void {
   const found = requireHost(socket);
   if (!found) return;
   const { room, player: host } = found;
@@ -519,7 +538,7 @@ export function kick(socket: WebSocket, targetId: string): void {
   ejectPlayer(room, target, "host");
 }
 
-export function report(socket: WebSocket, targetId: string): void {
+export function report(socket: SocketLike, targetId: string): void {
   const found = locate(socket);
   if (!found) return;
   const { room, player } = found;
@@ -544,7 +563,7 @@ export function report(socket: WebSocket, targetId: string): void {
   broadcast(room);
 }
 
-export function submitAnswer(socket: WebSocket, text: string): void {
+export function submitAnswer(socket: SocketLike, text: string): void {
   const found = locate(socket);
   if (!found) return;
   const { room, player } = found;
@@ -560,7 +579,7 @@ export function submitAnswer(socket: WebSocket, text: string): void {
   maybeAdvanceQuestion(room);
 }
 
-export function chat(socket: WebSocket, text: string): void {
+export function chat(socket: SocketLike, text: string): void {
   const found = locate(socket);
   if (!found) return;
   const { room, player } = found;
@@ -591,7 +610,7 @@ export function chat(socket: WebSocket, text: string): void {
   }
 }
 
-export function concede(socket: WebSocket): void {
+export function concede(socket: SocketLike): void {
   const found = locate(socket);
   if (!found) return;
   const { room, player } = found;
@@ -605,7 +624,7 @@ export function concede(socket: WebSocket): void {
   maybeConsensus(room);
 }
 
-export function playAgain(socket: WebSocket): void {
+export function playAgain(socket: SocketLike): void {
   const found = locate(socket);
   if (!found) return;
   const { room } = found;
@@ -631,7 +650,7 @@ export function playAgain(socket: WebSocket): void {
   broadcast(room);
 }
 
-export function leave(socket: WebSocket): void {
+export function leave(socket: SocketLike): void {
   const found = locate(socket);
   if (!found) return;
   const { room, player } = found;
@@ -646,7 +665,7 @@ export function leave(socket: WebSocket): void {
   destroyIfEmpty(room);
 }
 
-export function disconnect(socket: WebSocket): void {
+export function disconnect(socket: SocketLike): void {
   const loc = socketRoom.get(socket);
   if (!loc) return;
   const room = rooms.get(loc.roomCode);
