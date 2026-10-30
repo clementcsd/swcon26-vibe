@@ -19,7 +19,7 @@ import {
   SOCKET_OPEN,
   type SocketLike,
 } from "../../../server/rooms";
-import { MIN_PLAYERS, MAX_PLAYERS, REPORT_LIMIT } from "../../../shared/protocol";
+import { MIN_PLAYERS, MAX_PLAYERS, REPORT_LIMIT, MAX_ANSWER_LENGTH, MAX_CHAT_LENGTH } from "../../../shared/protocol";
 
 /**
  * Minimal in-memory WebSocket stand-in matching the `SocketLike` interface that
@@ -836,6 +836,235 @@ describe("snapshot", () => {
 
     host.clear();
     joiner.clear();
+  });
+});
+
+describe("submitAnswer", () => {
+  function enterQuestionPhase(): { host: MockSocket; joiner: MockSocket } {
+    const host = makeSocket();
+    const joiner = makeSocket();
+    join(host, "Alice", VALID_ID);
+    const code = host.lastParsed<{ room: { code: string } }>()?.room.code!;
+    join(joiner, "Bob", VALID_ID_2, code);
+    startGame(host);
+    host.clear();
+    joiner.clear();
+    return { host, joiner };
+  }
+
+  it("is idempotent — submitting twice keeps the first answer", () => {
+    const { host } = enterQuestionPhase();
+    submitAnswer(host, "First stance on the issue.");
+    submitAnswer(host, "Second stance that should be ignored.");
+    expect(lastError(host)).toBeNull();
+
+    const state = host.findParsed<{
+      room: { players: Array<{ id: string; hasAnswer: boolean }> };
+    }>("state");
+    const me = state?.room.players.find((p) => p.id === VALID_ID);
+    expect(me?.hasAnswer).toBe(true);
+  });
+
+  it("truncates answers to MAX_ANSWER_LENGTH", () => {
+    const { host } = enterQuestionPhase();
+    const longAnswer = "x".repeat(MAX_ANSWER_LENGTH + 50);
+    submitAnswer(host, longAnswer);
+    expect(lastError(host)).toBeNull();
+
+    const state = host.findParsed<{
+      room: { players: Array<{ id: string; hasAnswer: boolean }> };
+    }>("state");
+    const me = state?.room.players.find((p) => p.id === VALID_ID);
+    expect(me?.hasAnswer).toBe(true);
+  });
+
+  it("rejects when the player already has an answer", () => {
+    const { host } = enterQuestionPhase();
+    submitAnswer(host, "My stance on this issue.");
+    submitAnswer(host, "A different stance.");
+    expect(lastError(host)).toBeNull();
+  });
+});
+
+describe("chat", () => {
+  function enterDebatePhase(): { host: MockSocket; joiner: MockSocket } {
+    const h = makeSocket();
+    const j = makeSocket();
+    join(h, "Alice", VALID_ID);
+    const code = h.lastParsed<{ room: { code: string } }>()?.room.code!;
+    join(j, "Bob", VALID_ID_2, code);
+    startGame(h);
+    h.clear();
+    j.clear();
+    submitAnswer(h, "This is my stance on the issue.");
+    submitAnswer(j, "This is the opposing stance.");
+    h.clear();
+    j.clear();
+    return { host: h, joiner: j };
+  }
+
+  it("ignores empty messages", () => {
+    const { host, joiner } = enterDebatePhase();
+    chat(host, "");
+    expect(lastError(host)).toBeNull();
+    const chatMsg = joiner.findParsed<{ type: string }>("chat");
+    expect(chatMsg).toBeNull();
+  });
+
+  it("ignores whitespace-only messages", () => {
+    const { host, joiner } = enterDebatePhase();
+    chat(host, "   ");
+    expect(lastError(host)).toBeNull();
+    const chatMsg = joiner.findParsed<{ type: string }>("chat");
+    expect(chatMsg).toBeNull();
+  });
+
+  it("truncates messages to MAX_CHAT_LENGTH", () => {
+    const { host, joiner } = enterDebatePhase();
+    const longMessage = "a".repeat(MAX_CHAT_LENGTH + 50);
+    chat(host, longMessage);
+    expect(lastError(host)).toBeNull();
+
+    const message = joiner.findParsed<{
+      message: { text: string };
+    }>("chat");
+    expect(message?.message.text.length).toBeLessThanOrEqual(MAX_CHAT_LENGTH);
+  });
+});
+
+describe("leave", () => {
+  it("broadcasts updated state to remaining players", () => {
+    const host = makeSocket();
+    const joiner = makeSocket();
+    join(host, "Alice", VALID_ID);
+    const code = host.lastParsed<{ room: { code: string } }>()?.room.code!;
+    join(joiner, "Bob", VALID_ID_2, code);
+    host.clear();
+    joiner.clear();
+
+    leave(joiner);
+
+    const state = host.findParsed<{ room: { players: Array<{ id: string }> } }>("state");
+    expect(state?.room.players.map((p) => p.id)).toEqual([VALID_ID]);
+  });
+});
+
+describe("disconnect", () => {
+  it("marks a player as disconnected (not removed) during a debate", () => {
+    const host = makeSocket();
+    const joiner = makeSocket();
+    join(host, "Alice", VALID_ID);
+    const code = host.lastParsed<{ room: { code: string } }>()?.room.code!;
+    join(joiner, "Bob", VALID_ID_2, code);
+    startGame(host);
+    host.clear();
+    joiner.clear();
+    submitAnswer(host, "This is my stance on the issue.");
+    submitAnswer(joiner, "This is the opposing stance.");
+    host.clear();
+    joiner.clear();
+
+    disconnect(joiner);
+
+    const state = host.findParsed<{
+      room: { players: Array<{ id: string; connected: boolean }> };
+    }>("state");
+    const bob = state?.room.players.find((p) => p.id === VALID_ID_2);
+    expect(bob?.connected).toBe(false);
+    expect(state?.room.players.map((p) => p.id)).toContain(VALID_ID_2);
+  });
+
+  it("broadcasts updated state with the player disconnected during debate", () => {
+    const host = makeSocket();
+    const joiner = makeSocket();
+    join(host, "Alice", VALID_ID);
+    const code = host.lastParsed<{ room: { code: string } }>()?.room.code!;
+    join(joiner, "Bob", VALID_ID_2, code);
+    startGame(host);
+    host.clear();
+    joiner.clear();
+    submitAnswer(host, "This is my stance on the issue.");
+    submitAnswer(joiner, "This is the opposing stance.");
+    host.clear();
+    joiner.clear();
+
+    disconnect(joiner);
+
+    const state = host.findParsed<{
+      room: { players: Array<{ id: string; connected: boolean }> };
+    }>("state");
+    const bob = state?.room.players.find((p) => p.id === VALID_ID_2);
+    expect(bob?.connected).toBe(false);
+  });
+});
+
+describe("resume", () => {
+  it("successfully reconnects to an active debate", () => {
+    const host = makeSocket();
+    const joiner = makeSocket();
+    join(host, "Alice", VALID_ID);
+    const code = host.lastParsed<{ room: { code: string } }>()?.room.code!;
+    join(joiner, "Bob", VALID_ID_2, code);
+    startGame(host);
+    host.clear();
+    joiner.clear();
+
+    const reconnected = makeSocket();
+    resume(reconnected, VALID_ID_2);
+    expect(lastError(reconnected)).toBeNull();
+
+    const welcome = reconnected.findParsed<{
+      type: string;
+      playerId: string;
+    }>("welcome");
+    expect(welcome?.type).toBe("welcome");
+    expect(welcome?.playerId).toBe(VALID_ID_2);
+  });
+});
+
+describe("setSeats", () => {
+  it("broadcasts updated seatLimit to all players", () => {
+    const host = makeSocket();
+    const joiner = makeSocket();
+    join(host, "Alice", VALID_ID);
+    const code = host.lastParsed<{ room: { code: string } }>()?.room.code!;
+    join(joiner, "Bob", VALID_ID_2, code);
+    host.clear();
+    joiner.clear();
+
+    setSeats(host, 6);
+    expect(lastError(host)).toBeNull();
+
+    const hostState = host.findParsed<{ room: { seatLimit: number } }>("state");
+    expect(hostState?.room.seatLimit).toBe(6);
+
+    const joinerState = joiner.findParsed<{ room: { seatLimit: number } }>("state");
+    expect(joinerState?.room.seatLimit).toBe(6);
+  });
+});
+
+describe("join", () => {
+  it("assigns colors in rotation from the COLORS pool", () => {
+    const first = makeSocket();
+    const second = makeSocket();
+    const third = makeSocket();
+
+    join(first, "Alice", VALID_ID);
+    const firstColor = first.lastParsed<{
+      room: { players: Array<{ id: string; color: string }> };
+    }>()?.room.players.find((p) => p.id === VALID_ID)?.color;
+
+    const code = first.lastParsed<{ room: { code: string } }>()?.room.code!;
+    join(second, "Bob", VALID_ID_2, code);
+    const secondColor = second.lastParsed<{
+      room: { players: Array<{ id: string; color: string }> };
+    }>()?.room.players.find((p) => p.id === VALID_ID_2)?.color;
+
+    join(third, "Carol", "750e8400-e29b-41d4-a716-446655440002", code);
+
+    expect(firstColor).toBeTruthy();
+    expect(secondColor).toBeTruthy();
+    expect(secondColor).not.toBe(firstColor);
   });
 });
 
