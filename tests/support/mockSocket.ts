@@ -58,6 +58,20 @@ export class MockWebSocket {
     return this.sent.length;
   }
 
+  /** Every message sent so far, parsed from JSON, oldest first. */
+  get messages(): Array<{ type: string } & Record<string, any>> {
+    return this.sent.map((raw) => JSON.parse(raw));
+  }
+
+  /** Most recent parsed message of the given type, or null. */
+  lastOfType<T = any>(type: string): T | null {
+    const all = this.messages;
+    for (let i = all.length - 1; i >= 0; i -= 1) {
+      if (all[i]!.type === type) return all[i] as T;
+    }
+    return null;
+  }
+
   clearSent(): void {
     this.sent = [];
   }

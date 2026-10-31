@@ -28,11 +28,11 @@ The suite is split into three independent categories:
 |---------|----------|-------------|-------|
 | `npm test` / `npm run test:unit` | Unit | Node | Pure functions (censor, protocol, questions, room helpers). Fast; runs on every change. |
 | `npm run test:integration` | Integration | Node | In-process room logic with mocked WebSocket + fake timers. |
-| `npm run test:e2e` | E2E | Node | Full stack over a real WebSocket; requires a running server. |
+| `npm run test:e2e` | E2E | Node | Full stack over a real WebSocket; reuses a server on `E2E_PORT` (default 3001) or starts one. |
 | `npm run test:ci` | CI | Node | Unit + integration (the gated pipeline). |
 | `npm run test:coverage` | Coverage | Node | Unit run with v8 coverage and thresholds. |
 | `npm run test:watch` | Watch | Node | Interactive watch mode. |
 
-Tests live under `tests/` mirroring the source tree (`tests/unit`, `tests/integration`, `tests/e2e`), with shared fixtures in `tests/support/`. The integration and e2e directories contain skipped `describe.skip` spec backlogs describing the scenarios still to be implemented — no real assertions are added yet.
+Tests live under `tests/` mirroring the source tree (`tests/unit`, `tests/integration`, `tests/e2e`), with shared fixtures in `tests/support/`.
 
 CI (`.github/workflows/ci.yml`) runs tests (unit + integration), coverage, client build, and end-to-end tests on every push and pull request to `main`.

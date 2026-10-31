@@ -63,6 +63,8 @@ type Room = {
   code: string;
   phase: Phase;
   question: string;
+  /** Question from the previous round, kept so the next round can avoid it. */
+  lastQuestion: string;
   phaseEndsAt: number | null;
   players: Player[];
   messages: ChatMessage[];
@@ -226,7 +228,8 @@ function ejectPlayer(room: Room, target: Player, reason: "host" | "reports"): vo
 
 function startQuestion(room: Room): void {
   room.phase = "question";
-  room.question = pickQuestion(room.question);
+  room.question = pickQuestion(room.lastQuestion);
+  room.lastQuestion = room.question;
   room.phaseEndsAt = Date.now() + QUESTION_MS;
   room.messages = [];
   room.surrender = null;
@@ -308,6 +311,7 @@ function createRoom(): Room {
     code: uniqueCode(),
     phase: "waiting",
     question: "",
+    lastQuestion: "",
     phaseEndsAt: null,
     players: [],
     messages: [],
