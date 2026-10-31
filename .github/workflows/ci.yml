@@ -1,0 +1,152 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------
+  # Unit + integration tests (gated pipeline)
+  # ---------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit + integration tests
+        run: npm run test:ci
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-node-${{ matrix.node-version }}
+          path: coverage/
+          retention-days: 7
+
+  # ---------------------------------------------------------------
+  # Compile the project (Vite client build -> dist/)
+  # ---------------------------------------------------------------
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile client (vite build)
+        run: npm run build
+
+      - name: Verify build output exists
+        run: test -d dist/client && test -f dist/client/index.html
+
+      - name: Upload compiled client
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-client
+          path: dist/client/
+          retention-days: 7
+
+  # ---------------------------------------------------------------
+  # Coverage with thresholds (v8)
+  # ---------------------------------------------------------------
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run coverage suite
+        run: npm run test:coverage
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 7
+
+  # ---------------------------------------------------------------
+  # End-to-end tests (needs a running server + built client)
+  # ---------------------------------------------------------------
+  e2e:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile client (vite build)
+        run: npm run build
+
+      - name: Start server in background
+        run: PORT=3001 nohup npm start > /tmp/server.log 2>&1 &
+
+      - name: Wait for server to become reachable
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sSf http://localhost:3001/health >/dev/null 2>&1; then
+              echo "Server reachable on port 3001"
+              exit 0
+            fi
+            echo "Waiting for server... ($i/30)"
+            sleep 2
+          done
+          echo "Server did not become reachable. Server log:"
+          cat /tmp/server.log || true
+          exit 1
+
+      - name: Run end-to-end tests
+        run: npm run test:e2e
+
+      - name: Stop server
+        if: always()
+        run: pkill -f "tsx server/index.ts" || true

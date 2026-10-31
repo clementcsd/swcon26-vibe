@@ -35,4 +35,4 @@ The suite is split into three independent categories:
 
 Tests live under `tests/` mirroring the source tree (`tests/unit`, `tests/integration`, `tests/e2e`), with shared fixtures in `tests/support/`. The integration and e2e directories contain skipped `describe.skip` spec backlogs describing the scenarios still to be implemented — no real assertions are added yet.
 
-CI (`.github/workflows/test.yml`) runs `npm run test:ci` on every push and pull request to `main`.
+CI (`.github/workflows/ci.yml`) runs tests (unit + integration), coverage, client build, and end-to-end tests on every push and pull request to `main`.
